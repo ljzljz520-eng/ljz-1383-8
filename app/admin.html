@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理台 · 园丁日志</title>
+<link rel="stylesheet" href="/static/style.css">
+</head><body>
+<header class="topbar"><a class="brand" href="/">🌿 园丁日志</a>
+  <span>管理台</span><span class="region">录入植物 / 照片 / 观察 · 离线补记</span></header>
+<main>
+<div id="offlineBanner" class="offline-banner">⚠ 当前离线，请求已暂存本机（<span id="qcount">0</span> 条），联网后点“同步补记”。</div>
+<div class="field" style="max-width:520px">
+  <label>管理 Token（Bearer）</label>
+  <input id="token" placeholder="devtoken">
+  <label>设备标识（跨设备区分）</label>
+  <input id="device" value="laptop-A">
+</div>
+<div class="tabs" id="tabs"></div>
+<div class="panel" id="panel"></div>
+<h3>请求 / 同步结果</h3>
+<div id="out">（操作结果显示在这里）</div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const log = (...a) => { $('#out').textContent = a.map(x => typeof x==='object'?JSON.stringify(x,null,1):x).join(' ') + '\n' + $('#out').textContent; };
+function uid(p){ return p + '-' + crypto.getRandomValues(new Uint32Array(2)).join(''); }
+function getToken(){ return localStorage.getItem('gtoken') || 'devtoken'; }
+$('#token').value = getToken();
+$('#device').value = localStorage.getItem('gdevice') || 'laptop-A';
+$('#token').onchange = e => localStorage.setItem('gtoken', e.target.value);
+$('#device').onchange = e => localStorage.setItem('gdevice', e.target.value);
+
+const QUEUE_KEY = 'gqueue';
+let queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+function refreshBanner(){ $('#qcount').textContent = queue.length;
+  $('#offlineBanner').style.display = navigator.onLine && queue.length===0 ? 'none':'block'; }
+addEventListener('online', refreshBanner); addEventListener('offline', refreshBanner);
+
+async function api(path, opts={}){
+  opts.headers = Object.assign({'Content-Type':'application/json','Authorization':'Bearer '+getToken(),
+    'X-Device-Id': $('#device').value}, opts.headers||{});
+  try{
+    const r = await fetch(path, opts); const j = await r.json();
+    if(!r.ok) log('HTTP', r.status, j);
+    return j;
+  }catch(e){
+    if(navigator.onLine) throw e;
+    return null;
+  }
+}
+// offline-safe: mutating JSON requests are queued when offline, flushed in a sync batch
+function enqueue(kind, payload){
+  const client_uid = payload.client_uid || uid(kind.slice(0,3));
+  payload.client_uid = client_uid;
+  queue.push({kind, payload}); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+  refreshBanner(); log('已离线暂存', kind, client_uid);
+  return {queued:true, client_uid};
+}
+async function mut(path, body, syncKind){
+  if(!navigator.onLine){ const q = enqueue(syncKind, body); return q; }
+  const j = await api(path, {method:'POST', body:JSON.stringify(body)});
+  log('←', path, j); return j;
+}
+async function syncQueue(){
+  if(queue.length===0){ log('队列为空'); return; }
+  const batch = {client_batch_id: uid('batch'), items: queue};
+  const r = await fetch('/api/admin/sync/push', {method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+getToken(),'X-Device-Id':$('#device').value},
+    body: JSON.stringify(batch)}).then(r=>r.json());
+  log('同步结果', r);
+  // keep only items that came back error/conflict for manual resolution
+  const statuses = (r.items||[]).map(x=>x.status);
+  queue = queue.filter((_,i)=>statuses[i]==='error'||statuses[i]==='conflict');
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); refreshBanner();
+}
+
+/* ---------------------------- forms per tab ---------------------------- */
+const TABS = {
+region: () => `
+  <h2>站主声明地区与分季规则</h2>
+  <p class="personal-note">春夏秋冬只由该地区启用的规则决定（日序边界），不按月份对所有地区套同一季节。</p>
+  <div class="field"><label>新地区 code</label><input id="rcode" placeholder="dali"></div>
+  <div class="field"><label>名称</label><input id="rname" placeholder="大理"></div>
+  <div class="field"><label>气候说明</label><input id="rnote"></div>
+  <button onclick="createRegion()">声明地区并切换</button>
+  <hr><h3>新分季规则（用平年/闰年间通用的日序 1..366）</h3>
+  <div class="field"><label>春起</label><input id="sp" type="number" value="77"></div>
+  <div class="field"><label>夏起</label><input id="su" type="number" value="167"></div>
+  <div class="field"><label>秋起</label><input id="au" type="number" value="243"></div>
+  <div class="field"><label>冬起（可跨年）</label><input id="wi" type="number" value="322"></div>
+  <div class="field"><label>规则名</label><input id="rlab" value="本地四季"></div>
+  <button onclick="createRule()">建立并启用规则</button>
+  <button class="secondary" onclick="showRegion()">查看当前地区/规则</button>`,
+env: () => `
+  <h2>环境与盆器位置</h2>
+  <div class="field"><label>环境名</label><input id="en" placeholder="南阳台"></div>
+  <div class="field"><label>类型 indoor/outdoor/greenhouse</label><input id="ek" value="indoor"></div>
+  <div class="field"><label>光照</label><input id="el" placeholder="全日照"></div>
+  <div class="field"><label>启用日期</label><input id="ef" type="date"></div>
+  <button onclick="createEnv()">新增环境</button>
+  <hr><div class="field"><label>盆器编号</label><input id="pc" placeholder="P-010"></div>
+  <div class="field"><label>材质</label><input id="pm" placeholder="红陶"></div>
+  <div class="field"><label>口径 cm</label><input id="pd" type="number"></div>
+  <button onclick="createPot()">新增盆器</button>`,
+plant: () => `
+  <h2>植物个体（同品种多盆=多个体）</h2>
+  <div class="field"><label>名称（当前定名）</label><input id="pn"></div>
+  <div class="field"><label>入档日期</label><input id="pf" type="date"></div>
+  <div class="field"><label>来源</label><input id="ps" placeholder="朋友扦插分享"></div>
+  <div class="field"><label>盆器 id（可空）</label><input id="pp" type="number"></div>
+  <div class="field"><label>环境 id（可空）</label><input id="pe" type="number"></div>
+  <button onclick="createPlant()">建档</button>
+  <hr><h3>身份事件（追加留痕）</h3>
+  <div class="field"><label>植物 id</label><input id="epid" type="number"></div>
+  <div class="field"><label>类型 repot/move/divide_out/correct_name/note</label><input id="ept"></div>
+  <div class="field"><label>日期</label><input id="ed" type="date"></div>
+  <div class="field"><label>from_pot</label><input id="efp" type="number"></div>
+  <div class="field"><label>to_pot / pot</label><input id="etp" type="number"></div>
+  <div class="field"><label>to_environment</label><input id="ete" type="number"></div>
+  <div class="field"><label>新名（订正/分株用）</label><input id="enm"></div>
+  <div class="field"><label>说明</label><input id="edt"></div>
+  <button onclick="addEvent()">追加身份事件</button>`,
+obs: () => `
+  <h2>观察事件（追加；同一天可多条；原始记录不可覆盖）</h2>
+  <div class="field"><label>植物 id</label><input id="opid" type="number"></div>
+  <div class="field"><label>观察时间（当地 ISO）</label><input id="oat" placeholder="2026-05-02T08:30"></div>
+  <div class="field"><label>标题</label><input id="oti"></div>
+  <div class="field"><label>正文（原始观察）</label><textarea id="obo" rows="3"></textarea></div>
+  <div class="field"><label>标签</label><input id="otg" placeholder="浇水,虫害"></div>
+  <button onclick="createObs()">追加观察</button>
+  <hr><h3>事后补记（作为修订追加）</h3>
+  <div class="field"><label>观察 id</label><input id="orid" type="number"></div>
+  <div class="field"><label>补记</label><input id="orn"></div>
+  <button onclick="addRevision()">追加补记</button>
+  <hr><h3>照片（上传即剥离 EXIF/GPS，说明定格）</h3>
+  <div class="field"><label>植物 id</label><input id="phid" type="number"></div>
+  <div class="field"><label>观察 id（可空）</label><input id="pho" type="number"></div>
+  <div class="field"><label>照片说明（跟随当时对象，不被新标签覆盖）</label><input id="phcap"></div>
+  <div class="field"><label>文件</label><input id="phfile" type="file" accept="image/jpeg,image/png"></div>
+  <button onclick="uploadPhoto()">上传照片</button>`,
+doc: () => `
+  <h2>文章（整篇覆盖 + 版本 + 撤回）</h2>
+  <div class="field"><label>slug</label><input id="asl"></div>
+  <div class="field"><label>标题</label><input id="ati"></div>
+  <div class="field"><label>正文</label><textarea id="abo" rows="4"></textarea></div>
+  <div class="field"><label>状态 draft/published</label><input id="ast" value="published"></div>
+  <button onclick="createArticle()">建文章</button>
+  <hr>
+  <div class="field"><label>文章 id</label><input id="auid" type="number"></div>
+  <div class="field"><label>expected_version（乐观锁）</label><input id="aev" type="number"></div>
+  <div class="field"><label>新标题</label><input id="auti"></div>
+  <div class="field"><label>新正文（整篇覆盖）</label><textarea id="aubo" rows="3"></textarea></div>
+  <label><input type="checkbox" id="afo"> force（冲突已人工合并后强制）</label>
+  <button onclick="updateArticle()">覆盖提交新版本</button>
+  <button class="secondary" onclick="withdrawArticle()">撤回公开文章</button>
+  <hr><h3>个人经验总结（独立版本化，不自动推广为通用养护指令）</h3>
+  <div class="field"><label>关联植物 id（可空）</label><input id="epid2" type="number"></div>
+  <div class="field"><label>适用范围声明</label><input id="esc" value="仅本人当前环境这一盆有效"></div>
+  <div class="field"><label>标题</label><input id="eti"></div>
+  <div class="field"><label>总结正文</label><textarea id="ebo" rows="3"></textarea></div>
+  <button onclick="createExperience()">建经验记录</button>`,
+maint: () => `
+  <h2>同步与索引</h2>
+  <button onclick="syncQueue()">同步离线补记队列</button>
+  <button class="secondary" onclick="rebuild()">重建筛选索引</button>
+  <button class="secondary" onclick="indexStatus()">索引状态</button>
+  <button class="secondary" onclick="envStats()">环境统计</button>
+  <hr><pre id="raw" style="white-space:pre-wrap"></pre>`
+};
+function openTab(k){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.k===k));
+  $('#panel').innerHTML = TABS[k]();
+}
+Object.keys(TABS).forEach((k,i)=>{
+  const b=document.createElement('button'); b.dataset.k=k;
+  b.textContent={region:'地区/季节',env:'环境/盆',plant:'植物/身份',obs:'观察/照片',doc:'文章/经验',maint:'同步/索引'}[k];
+  b.onclick=()=>openTab(k); $('#tabs').appendChild(b);
+});
+openTab('region'); refreshBanner();
+
+/* actions */
+async function showRegion(){ log(await api('/api/region')); }
+async function createRegion(){
+  await mut('/api/admin/region', {code:$('#rcode').value,name:$('#rname').value,climate_note:$('#rnote').value}, 'region');
+}
+async function createRule(){
+  await mut('/api/admin/season-rules', {label:$('#rlab').value,
+    spring_doy:+$('#sp').value, summer_doy:+$('#su').value, autumn_doy:+$('#au').value, winter_doy:+$('#wi').value}, 'season_rule');
+}
+async function createEnv(){ await mut('/api/admin/environments',
+  {name:$('#en').value,kind:$('#ek').value,light:$('#el').value,active_from:$('#ef').value}, 'environment'); }
+async function createPot(){ await mut('/api/admin/pots',
+  {code:$('#pc').value,material:$('#pm').value,diameter_cm:+$('#pd').value||null}, 'pot'); }
+async function createPlant(){ const r=await mut('/api/admin/plants',
+  {name:$('#pn').value,acquired_date:$('#pf').value,source_note:$('#ps').value,
+   pot_id:+$('#pp').value||null,environment_id:+$('#pe').value||null}, 'plant');
+  if(r&&r.id){ $('#epid').value=r.id; $('#opid').value=r.id; $('#phid').value=r.id; } }
+async function addEvent(){
+  const p={plant_id:+$('#epid').value,event_type:$('#ept').value,event_date:$('#ed').value,
+    from_pot_id:+$('#efp').value||null,to_pot_id:+$('#etp').value||null,pot_id:+$('#etp').value||null,
+    to_environment_id:+$('#ete').value||null,new_name:$('#enm').value,detail:$('#edt').value};
+  await mut(`/api/admin/plants/${p.plant_id}/events`, p, 'plant_event');
+}
+async function createObs(){ await mut('/api/admin/observations',
+  {plant_id:+$('#opid').value,observed_at:$('#oat').value,title:$('#oti').value,
+   body:$('#obo').value,tags:$('#otg').value}, 'observation'); }
+async function addRevision(){ await mut(`/api/admin/observations/${+$('#orid').value}/revisions`,
+  {note:$('#orn').value}, 'observation_revision'); }
+async function uploadPhoto(){
+  const f=$('#phfile').files[0]; if(!f){alert('choose file');return;}
+  const fd=new FormData();
+  fd.append('file',f); fd.append('plant_id',$('#phid').value);
+  if($('#pho').value) fd.append('observation_id',$('#pho').value);
+  fd.append('caption',$('#phcap').value);
+  const r=await fetch('/api/admin/photos',{method:'POST',
+    headers:{'Authorization':'Bearer '+getToken(),'X-Device-Id':$('#device').value},body:fd}).then(r=>r.json());
+  log('上传结果', r);
+}
+async function createArticle(){ const r=await mut('/api/admin/articles',
+  {slug:$('#asl').value,title:$('#ati').value,body:$('#abo').value,status:$('#ast').value},'article');
+  if(r&&r.id)$('#auid').value=r.id; }
+async function updateArticle(){
+  await mut(`/api/admin/articles/${+$('#auid').value}/versions`,
+   {title:$('#auti').value,body:$('#aubo').value,expected_version:+$('#aev').value||null,
+    force:$('#afo').checked,change_summary:'管理台覆盖'}, 'article_version');
+}
+async function withdrawArticle(){
+  await api(`/api/admin/articles/${+$('#auid').value}/status`,
+    {method:'POST',body:JSON.stringify({status:'withdrawn'})});
+  log('已撤回');
+}
+async function createExperience(){ await mut('/api/admin/experiences',
+  {plant_id:+$('#epid2').value||null,scope_note:$('#esc').value,title:$('#eti').value,
+   body:$('#ebo').value}, 'experience'); }
+async function rebuild(){ log(await api('/api/admin/index/rebuild',{method:'POST'})); }
+async function indexStatus(){ log(await api('/api/index/status')); }
+async function envStats(){ log(await api('/api/stats/environments')); }
+</script>
+</body></html>
