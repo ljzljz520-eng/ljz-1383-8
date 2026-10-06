@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>园艺日志 · GardenLog</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🪴 园艺日志</div>
+  <div id="siteDecl" class="site-decl" title="季节由站主声明的地区与分季规则决定"></div>
+  <div class="spacer"></div>
+  <span id="netDot" class="dot" title="网络状态"></span>
+  <span id="queueBadge" class="badge hidden">离线待传 0</span>
+  <input id="tokenInput" type="password" placeholder="管理令牌" title="管理令牌（默认 devtoken）">
+  <button id="loginBtn">登录</button>
+</header>
+<nav class="tabs">
+  <button data-tab="browse" class="active">季节 / 环境浏览</button>
+  <button data-tab="plants">植物个体</button>
+  <button data-tab="articles">公开文章</button>
+  <button class="admin-only" data-tab="entry">录入观察/照片</button>
+  <button class="admin-only" data-tab="manage">目录管理</button>
+  <button class="admin-only" data-tab="sync">同步中心</button>
+</nav>
+<main>
+  <!-- 浏览 -->
+  <section id="tab-browse" class="tab">
+    <div class="filters">
+      <label>季节（按站主分季规则，基于观察日期）
+        <select id="fSeason"><option value="">全部</option>
+          <option>spring</option><option>summer</option><option>autumn</option><option>winter</option></select>
+      </label>
+      <label>环境（观察当时）<select id="fLocation"><option value="">全部</option></select></label>
+      <label>植物<select id="fPlant"><option value="">全部</option></select></label>
+      <label>关键词<input id="fQ" placeholder="正文/名称/品种"></label>
+    </div>
+    <div id="stats" class="stats"></div>
+    <div id="obsList" class="cards"></div>
+  </section>
+
+  <!-- 植物 -->
+  <section id="tab-plants" class="tab hidden">
+    <div id="plantList" class="plant-grid"></div>
+    <div id="plantDetail" class="hidden"></div>
+  </section>
+
+  <!-- 文章 -->
+  <section id="tab-articles" class="tab hidden">
+    <div class="admin-bar admin-only">
+      <button id="newArticleBtn">新建文章（整篇覆盖式）</button>
+    </div>
+    <div id="articleList" class="article-list"></div>
+    <div id="articleEditor" class="hidden"></div>
+  </section>
+
+  <!-- 录入 -->
+  <section id="tab-entry" class="tab hidden admin-pane">
+    <h3>录入观察（事件追加；同一天可多次）</h3>
+    <form id="obsForm" class="form">
+      <label>植物个体<select name="plant_id" required></select></label>
+      <label>观察日期 <input type="date" name="obs_date" required>
+        <small>可早于今天：换环境后补记旧观察时，系统按该日期当时的盆/环境/季节生成快照</small></label>
+      <label>观察正文<textarea name="body" rows="4" required placeholder="今天观察到……（原始观察，事后订正不会覆盖它）"></textarea></label>
+      <label><input type="checkbox" name="published" checked> 公开发表</label>
+      <label>照片（上传即剥离 EXIF）<input type="file" name="photos" accept="image/jpeg,image/png" multiple></label>
+      <label>照片说明（跟随拍时对象，改名不回写）<input name="caption" placeholder="如：刚冒的新芽，当时挂的旧名牌"></label>
+      <button type="submit">保存观察</button>
+    </form>
+    <div id="entryResult"></div>
+  </section>
+
+  <!-- 目录管理 -->
+  <section id="tab-manage" class="tab hidden admin-pane">
+    <h3>站点声明：地区与分季规则</h3>
+    <form id="settingsForm" class="form">
+      <label>地区<input name="region" required></label>
+      <label>规则说明<input name="rule_note" placeholder="如：本地按气象季节，春夏秋冬起点如下"></label>
+      <div class="season-grid">
+        <label>春起 (月,日)<input name="spring" placeholder="3,1"></label>
+        <label>夏起<input name="summer" placeholder="6,1"></label>
+        <label>秋起<input name="autumn" placeholder="9,1"></label>
+        <label>冬起<input name="winter" placeholder="12,1"></label>
+      </div>
+      <button type="submit">保存声明</button>
+      <button type="button" id="reindexBtn">按当前规则重建季节筛选索引</button>
+    </form>
+
+    <h3>环境（位置）</h3>
+    <form id="locForm" class="form inline">
+      <input name="name" placeholder="环境名，如 南阳台" required>
+      <input name="kind" placeholder="类型 indoor/balcony/outdoor">
+      <input name="condition" placeholder="当前条件，如 全日照西晒">
+      <input name="light" placeholder="光照">
+      <input type="date" name="valid_from" title="条件生效日">
+      <button>新增环境</button>
+    </form>
+    <div id="locAdmin"></div>
+
+    <h3>盆器</h3>
+    <form id="potForm" class="form inline">
+      <input name="code" placeholder="盆器编号 P-01" required>
+      <input name="name" placeholder="名称">
+      <input name="material" placeholder="材质">
+      <button>新增盆器</button>
+    </form>
+    <div id="potAdmin"></div>
+
+    <h3>植物个体（同品种多盆请分别建档）</h3>
+    <form id="plantForm" class="form inline">
+      <input name="code" placeholder="个体编号 PL-001" required>
+      <input name="display_name" placeholder="标签名，如 玉露 A" required>
+      <input name="cultivar" placeholder="品种">
+      <select name="pot_id"><option value="">无盆</option></select>
+      <select name="location_id"><option value="">无位置</option></select>
+      <button>建档</button>
+    </form>
+    <div id="plantAdmin"></div>
+  </section>
+
+  <!-- 同步中心 -->
+  <section id="tab-sync" class="tab hidden admin-pane">
+    <h3>离线补记 / 跨设备同步</h3>
+    <p class="hint">离线时所有录入进入本机队列（每条带唯一操作号）。联网后批量补传：重复操作幂等跳过；版本冲突进入待决队列，不会静默覆盖。</p>
+    <div class="sync-actions">
+      <button id="syncNowBtn">立即同步队列</button>
+      <button id="clearAppliedBtn">清除已应用记录</button>
+      <span id="syncStatus"></span>
+    </div>
+    <h4>本机待传操作</h4>
+    <div id="queueList"></div>
+    <h4>服务器冲突待决</h4>
+    <div id="conflictList"></div>
+  </section>
+</main>
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>

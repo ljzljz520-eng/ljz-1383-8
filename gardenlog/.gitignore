@@ -1,0 +1,6 @@
+node_modules/
+data/
+smoke/
+*.db
+*.db-wal
+*.db-shm

@@ -1,0 +1,16 @@
+{
+  "name": "gardenlog",
+  "version": "1.0.0",
+  "description": "园艺博主日志站：按季节/环境浏览，植物个体-盆器-位置-栽培记录建模，离线补记与版本化",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1"
+  }
+}
